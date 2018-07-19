@@ -21,14 +21,11 @@ use DateTime;
 
 use constant DEBUG => 0;
 
-my $tsg_file = "$ENV{'HOME'}/Dropbox/ngs_biofx_files/tso500_ctdna_v1.0/" .
-    "TSG_cancergenecensus.txt";
-
-#my $tsg_file = "$ENV{'HOME'}/Dropbox/ngs_biofx_files/tso500_ctdna_v1.0/" .
-    #"match_tsgs.txt";
+my $tsg_file = dirname($0) . "/TSG_cancergenecensus.txt";
+#my $tsg_file = dirname($0) . "/match_tsgs.txt";
 
 my $scriptname = basename($0);
-my $version = "v0.9.071918";
+my $version = "v0.10.071918";
 my $description = <<"EOT";
 Read in a hotspots BED file (Ion Torrent formatted), and annotate a MAF file 
 with the matching variant ID.  Also, determine which variants are MOIs based on 
@@ -103,16 +100,21 @@ $logger->info( "Starting TSO500 MOI Annotation Script..." );
 
 ################------ END Arg Parsing and Script Setup ------#################
 my @maf_files = @ARGV;
+
+$logger->info("Using Hotspot BED file " . basename($hs_bed));
 my $bed_data = read_hs_bed($hs_bed);
+
+$logger->info("Using TSG file " . basename($tsg_file));
+my $tsgs = read_tsgs($tsg_file);
 
 for my $maf_file (@maf_files) {
     print "Annotating '$maf_file'...\n" if DEBUG;
     $logger->info( "Annotating '$maf_file'..." );
-    my $results = annotate_maf($maf_file, $bed_data);
+    my $results = annotate_maf($maf_file, $bed_data, $tsgs);
     (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
     $logger->info( "Finished annotating. Printing results..." );
     print_results($results, $new_file, $mois_only);
-    $logger->info("Done with $maf_file!\n");
+    $logger->info("Done with $maf_file!\n\n");
 }
 
 sub print_results {
@@ -137,7 +139,7 @@ sub print_results {
 }
 
 sub annotate_maf {
-    my ($maf, $hotspots) = @_;
+    my ($maf, $hotspots, $tsgs) = @_;
     my @results;
 
     open(my $fh, "<", $maf);
@@ -183,7 +185,7 @@ sub annotate_maf {
             $moi_count{'Hotspots'}++;
         } else {
             $moi_type = run_nonhs_rules($elems[0], $elems[38], $elems[50], 
-                \%moi_count);
+                \%moi_count, $tsgs);
         }
 
         if (DEBUG) {
@@ -208,9 +210,8 @@ sub read_tsgs {
 }
 
 sub run_nonhs_rules {
-    my ($gene, $location, $function, $moi_count) = @_;
+    my ($gene, $location, $function, $moi_count, $tsgs) = @_;
 
-    my $tsgs = read_tsgs();
     my $moi_type = '.';
     my $exon = (split(/\//, $location))[0];
 
