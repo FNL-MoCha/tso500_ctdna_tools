@@ -25,7 +25,7 @@ my $tsg_file = dirname($0) . "/TSG_cancergenecensus.txt";
 #my $tsg_file = dirname($0) . "/match_tsgs.txt";
 
 my $scriptname = basename($0);
-my $version = "v0.10.071918";
+my $version = "v0.11.072318";
 my $description = <<"EOT";
 Read in a hotspots BED file (Ion Torrent formatted), and annotate a MAF file 
 with the matching variant ID.  Also, determine which variants are MOIs based on 
@@ -47,9 +47,8 @@ my $outfile;
 my $mois_only = 0;
 
 GetOptions( 
-    "mois_only|m"     => \$mois_only,
+    "mois_only|m"   => \$mois_only,
     "bed|b=s"       => \$hs_bed,
-    "output|o=s"    => \$outfile,
     "version|v"     => \$ver_info,
     "help|h"        => \$help )
 or die $usage;
@@ -74,12 +73,10 @@ if ( scalar( @ARGV ) < 1 ) {
     exit 1;
 }
 
-my $outfh;
-if ($outfile) {
-    print "Writing output to $outfile.\n";
-    open($outfh, ">", $outfile);
-} else {
-    $outfh = \*STDOUT;
+unless ($hs_bed) {
+    print "ERROR: You must indicate the Hotspots BED file to use for annotation!\n";
+    print "$usage\n";
+    exit 1;
 }
 
 # Set up a logger.
@@ -108,12 +105,16 @@ $logger->info("Using TSG file " . basename($tsg_file));
 my $tsgs = read_tsgs($tsg_file);
 
 for my $maf_file (@maf_files) {
+    # Annotate
     print "Annotating '$maf_file'...\n" if DEBUG;
     $logger->info( "Annotating '$maf_file'..." );
     my $results = annotate_maf($maf_file, $bed_data, $tsgs);
+
+    # Print
     (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
     $logger->info( "Finished annotating. Printing results..." );
     print_results($results, $new_file, $mois_only);
+
     $logger->info("Done with $maf_file!\n\n");
 }
 
@@ -126,15 +127,14 @@ sub print_results {
     print "Writing results to $filename (filter is $filter_status)\n";
 
     open(my $outfh, ">", $filename);
-    select $outfh;
 
     # Print headers
-    print shift @$data;
-    print shift @$data;
+    print {$outfh} shift @$data;
+    print {$outfh} shift @$data;
 
     for my $var (@$data) {
         next if $var =~ /\.$/ and $filter;
-        print $var;
+        print {$outfh} $var;
     }
 }
 
@@ -149,7 +149,7 @@ sub annotate_maf {
 
     # Add moi_type to header
     chomp(my $header2 = <$fh>);
-    push(@results, "$header2\tmoi_type\n");
+    push(@results, "$header2\tMOI_Type\tCount\n");
 
     my $var_count = 0;
     my %moi_count = (
@@ -171,12 +171,12 @@ sub annotate_maf {
         }
 
         # Try to get a hotspot ID
-        my $hsid = map_variant($elems[4], $elems[5], $elems[6], $elems[10], 
-            $elems[12], $hotspots);
+        my ($hsid, $count) = map_variant($elems[4], $elems[5], $elems[6], 
+            $elems[10], $elems[12], $hotspots);
 
         if (DEBUG) {
             print "> $elems[37]($elems[0]):$elems[34]:$elems[36] maps to  ", 
-                "==> $hsid\n";
+                "==> $hsid (count: $count)\n";
         }
         $elems[110] = $hsid;
 
@@ -193,7 +193,7 @@ sub annotate_maf {
             print "-"x75;
             print "\n\n";
         }
-        push(@results, join("\t", @elems, "$moi_type\n"));
+        push(@results, join("\t", @elems, "$moi_type\t$count\n"));
     }
     $logger->info("Total variants in file: $var_count." );
     my $moi_count_string;
@@ -251,33 +251,37 @@ sub run_nonhs_rules {
 sub map_variant {
     my ($chr, $maf_start, $maf_end, $ref, $alt, $hotspots) = @_;
     my $varid = '.';
+    my $count = '.';
 
     if ($hotspots->{$chr}) {
         for my $range (keys %{$hotspots->{$chr}}) {
             my ($r1, $r2) = split(/-/, $range);
             if ($maf_start >= $r1 and $maf_end <= $r2) {
-                $varid = match_variant($hotspots->{$chr}{$range}, $maf_start, 
-                    $maf_end, $ref, $alt);
-               last;
+                ($varid, $count) = match_variant($hotspots->{$chr}{$range}, 
+                    $maf_start, $maf_end, $ref, $alt);
+                last;
             }
         }
     }
-    return $varid;
+    return $varid, $count;
 }
 
 sub match_variant {
     my ($vars, $maf_start, $maf_end, $ref, $alt) = @_;
     for my $var (@$vars) {
-        my ($chr, $hs_start, $hs_end, $hs_ref, $hs_alt, $hsid) = split(/;/, $var);
+        my ($chr, $hs_start, $hs_end, $hs_ref, $hs_alt, $hsid, 
+            $count) = split(/;/, $var);
         # MAF file is 1-based, while the HS BED file is 0-based. Also will have 
         # to use different position for mapping if indel compared to snv.
         my $pos;
         ($ref eq '-') ? ($pos = $maf_start) : ($pos = $maf_start-1);
+        # TODO: May need to add an AA mapping algorithm here to match hotspots 
+        # with different base changes.
         if ($pos == $hs_start and $ref eq $hs_ref and $alt eq $hs_alt) {
-            return $hsid;
+            return ($hsid, $count);
         }
     }
-    return '.';
+    return ('.', '.');
 }
 
 sub read_hs_bed {
@@ -288,15 +292,22 @@ sub read_hs_bed {
     my $header = <$fh>;
     while (<$fh>) {
         my ($chr, $start, $end, $id, $allele, $amp) = split(/\t/);
+
+        # If we have a count metric from Rajesh's PublicData file, then include it.
+        my $count = '.';
+        if ( $amp =~ /COUNT=(\d+)$/ ) {
+            $count = $1;
+        }
+
         my ($ref, $alt) = $allele =~ /REF=([ACTG]+)?;OBS=([ACTG]+)?(?:;.*)?/;
         $ref //= '-';
         $alt //= '-';
+        
         push(@{$positions{$chr}}, $start, $end);
-        push(@hotspots, [$chr, $start, $end, $ref, $alt, $id]);
+        push(@hotspots, [$chr, $start, $end, $ref, $alt, $id, $count]);
     }
     close $fh;
     return build_hs_table(\%positions, \@hotspots);
-
 }
 
 sub build_hs_table {
