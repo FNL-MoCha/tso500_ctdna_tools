@@ -34,7 +34,7 @@ for my $resource_file ($tsg_file, $hs_bed, $oncokb_file) {
 }
 
 my $scriptname = basename($0);
-my $version = "v0.18.080118";
+my $version = "v0.19.080118";
 my $description = <<"EOT";
 Read in a hotspots BED file (Ion Torrent formatted) or an OncoKB variants file 
 (preferred!), and annotate a MAF file with the matching variant ID.  Also,
@@ -272,7 +272,7 @@ sub annotate_maf {
     $logger->info("Total variants in file: $var_count." );
     my $moi_count_string;
     for (sort keys %moi_count) {
-        $moi_count_string .= sprintf("\t%-37s: %s\n", $_, $moi_count{$_});
+        $moi_count_string .= sprintf("\t%-40s: %s\n", $_, $moi_count{$_});
     }
     $logger->info("MOI Counts:\n$moi_count_string" );
     return \@results;
@@ -302,10 +302,6 @@ sub run_nonhs_rules {
     # Look for non-hotspot MOIs in the data. Return after the first hit, even
     # though some variants may fit into more than one category.
     my ($gene, $location, $hgvs_p, $function, $moi_count, $tsgs) = @_;
-    #print "gene: $gene\n";
-    #print "location: $location\n";
-    #print "HGVSp: $hgvs_p\n";
-    #print "function: $function\n";
 
     my $moi_type = '.';
     my $exon = (split(/\//, $location))[0];
@@ -313,7 +309,6 @@ sub run_nonhs_rules {
     $aa_end //= $aa_start; # only get end if there is a range from indel.
 
     # DEBUG
-    #print "$hgvs_p: $aa_start  ==>  $aa_end\n";
     print "incoming => gene: $gene, exon: $exon, function: $function\n" if DEBUG;
     
     # Deleterious / Truncating in TSG
