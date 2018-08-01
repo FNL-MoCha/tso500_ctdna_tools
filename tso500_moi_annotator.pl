@@ -19,7 +19,7 @@ use Term::ANSIColor; # Optional colorized output to terminal.
 use Log::Log4perl qw(get_logger);
 use DateTime;
 
-use constant DEBUG => 1;
+use constant DEBUG => 0;
 
 my $scriptdir = dirname($0);
 
@@ -34,7 +34,7 @@ for my $resource_file ($tsg_file, $hs_bed, $oncokb_file) {
 }
 
 my $scriptname = basename($0);
-my $version = "v0.17.073118";
+my $version = "v0.18.080118";
 my $description = <<"EOT";
 Read in a hotspots BED file (Ion Torrent formatted) or an OncoKB variants file 
 (preferred!), and annotate a MAF file with the matching variant ID.  Also,
@@ -139,14 +139,10 @@ for my $maf_file (@ARGV) {
     my $results;
     $results = annotate_maf($maf_file, $annotation_data, $tsgs);
 
-    # XXX
-    __exit__(__LINE__);
-
     # Print results.
     (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
     $logger->info( "Finished annotating. Printing results..." );
     print_results($results, $new_file, $mois_only);
-
     $logger->info("Done with $maf_file!\n\n");
 }
 
@@ -195,11 +191,14 @@ sub annotate_maf {
 
     # Add moi_type to header
     chomp(my $header2 = <$fh>);
-    push(@results, "$header2\tMOI_Type\tCount\n");
+    if ($annot_method eq 'hs_bed') {
+        push(@results, "$header2\tMOI_Type\tCount\n");
+    } 
+    elsif ($annot_method eq 'oncokb') {
+        push(@results, "$header2\tMOI_Type\tOncogenicity\tEffect\n");
+    }
 
     my $var_count = 0;
-    # XXX
-    # TODO: get some new non-hs rule categories.
     my %moi_count = (
         'Hotspots' => 0,
         'Deleterious' => 0,
@@ -226,7 +225,7 @@ sub annotate_maf {
         $var_count++;
         chomp(my @elems = split(/\t/));
         my $moi_type = '.';
-        my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c, $hgvs_p, $tscript_id, 
+        my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c,$hgvs_p, $tscript_id, 
             $exon, $function) = @elems[0,4,5,6,10,12,34,36,37,38,50];
 
         # Try to get a hotspot ID
@@ -254,7 +253,6 @@ sub annotate_maf {
             $moi_type = 'Hotspot';
             $moi_count{'Hotspots'}++;
         } 
-        # XXX 
         else {
             ($moi_type, $oncogenicity, $effect) = run_nonhs_rules($gene, $exon, 
                 $hgvs_p, $function, \%moi_count, $tsgs);
@@ -265,7 +263,7 @@ sub annotate_maf {
             print "-"x75;
             print "\n\n";
         }
-        ($hs_bed) 
+        ($annot_method eq 'hs_bed') 
             ? push(@results, join("\t", @elems, $moi_type))
             : push(@results, join("\t", @elems, $moi_type, $oncogenicity, 
                 $effect));
@@ -277,8 +275,6 @@ sub annotate_maf {
         $moi_count_string .= sprintf("\t%-37s: %s\n", $_, $moi_count{$_});
     }
     $logger->info("MOI Counts:\n$moi_count_string" );
-
-    __exit__(__LINE__);
     return \@results;
 }
 
@@ -317,7 +313,7 @@ sub run_nonhs_rules {
     $aa_end //= $aa_start; # only get end if there is a range from indel.
 
     # DEBUG
-    print "$hgvs_p: $aa_start  ==>  $aa_end\n";
+    #print "$hgvs_p: $aa_start  ==>  $aa_end\n";
     print "incoming => gene: $gene, exon: $exon, function: $function\n" if DEBUG;
     
     # Deleterious / Truncating in TSG
