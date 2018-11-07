@@ -368,7 +368,7 @@ sub run_nonhs_rules {
     }
     # Kit Exons, 9, 11, 13, 14, or 17 mutations.
     elsif ($gene eq 'KIT') {
-        if ((grep { $exon eq $_  } ('9', '11', '13', '14'))
+        if ((grep { $exon eq $_  } ('9', '11', '13', '14', '17'))
             && $function =~ /inframe.*/ || $function eq 'missense_variant') {
             $moi_count->{'KIT Exons 9, 11, 13, 14, or 17 Mutations'}++;
             return ('KIT Mutation in Exons 9, 11, 13, 14, or 17',
