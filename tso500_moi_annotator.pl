@@ -20,6 +20,10 @@ use Log::Log4perl qw(get_logger);
 use DateTime;
 
 use constant DEBUG => 0;
+use constant TRUE => 1;
+use constant FALSE => 0;
+
+my $version = "v0.20.042619";
 
 my $scriptdir = dirname($0);
 
@@ -34,7 +38,6 @@ for my $resource_file ($tsg_file, $hs_bed, $oncokb_file) {
 }
 
 my $scriptname = basename($0);
-my $version = "v0.19.080118";
 my $description = <<"EOT";
 Read in a hotspots BED file (Ion Torrent formatted) or an OncoKB variants file 
 (preferred!), and annotate a MAF file with the matching variant ID.  Also,
@@ -57,13 +60,15 @@ my $ver_info;
 my $outfile;
 my $annot_method;
 my $mois_only = 0;
+my $verbose;
 
 GetOptions( 
     "annot|a=s"     => \$annot_method,
     "mois_only|m"   => \$mois_only,
     "bed|b=s"       => \$hs_bed,
     "oncokb|o=s"    => \$oncokb_file,
-    "version|v"     => \$ver_info,
+    "version"       => \$ver_info,
+    "verbose|v"     => \$verbose,
     "help|h"        => \$help )
 or die $usage;
 
@@ -84,6 +89,7 @@ version if $ver_info;
 my $err  = colored("ERROR:", 'bold red on_black');
 my $warn = colored("WARN:", 'bold yellow on_black');
 my $info = colored("INFO:", 'bold cyan on_black');
+my $debug = colored("DEBUG:", 'bold magenta on_black');
 
 # Make sure enough args passed to script
 if ( scalar( @ARGV ) < 1 ) {
@@ -99,21 +105,38 @@ unless ($annot_method) {
     exit 1;
 }
 
+$verbose = 1 if DEBUG;
+
 # Set up a logger.
 my $logfile = 'tso500_moi_annotator_' . now('short') . '.log';
 my $logger_conf = qq(
-    log4perl.logger    = DEBUG, Logfile
+    log4perl.logger = DEBUG, Logfile, screen
+    log4perl.logger.main = DEBUG
+
     log4perl.appender.Logfile    = Log::Log4perl::Appender::File
     log4perl.appender.Logfile.filename    = $logfile
     log4perl.appender.Logfile.mode    = append
     log4perl.appender.Logfile.layout = Log::Log4perl::Layout::PatternLayout
     log4perl.appender.Logfile.layout.message_chomp_before_newlist = 0
-    log4perl.appender.Logfile.layout.ConversionPattern = %d [ %p ]: %m%n
-    log4perl.logger.main = DEBUG
+    log4perl.appender.Logfile.layout.ConversionPattern = %d [ %p ]: %m{indent=4}%n
 );
+
+my $extra_conf = qq(
+    log4perl.appender.screen = Log::Log4perl::Appender::Screen
+    log4perl.appender.screen.stderr = 0
+    log4perl.appender.screen.layout = Log::Log4perl::Layout::PatternLayout
+    log4perl.appender.screen.layout.message_chomp_before_newlist = 0
+    log4perl.appender.screen.layout.ConversionPattern = %d [ %p ]: %m{indent=4}%n
+);
+
+$logger_conf .= $extra_conf if $verbose;
+
 Log::Log4perl->init(\$logger_conf);
 my $logger = get_logger();
-$logger->info( "Starting TSO500 MOI Annotation Script ($version)..." );
+my $intro_str = sprintf("\n%s\n\t\t    Starting TSO500 MOI Annotation Script\n%s\n",
+    "="x80, "="x80);
+$logger->info($intro_str);
+
 
 ################------ END Arg Parsing and Script Setup ------#################
 
@@ -128,6 +151,10 @@ if ($annot_method eq 'hs_bed') {
     $annotation_data = read_oncokb_file($oncokb_file);
 }
 
+
+# dd $annotation_data;
+# exit;
+
 # Load up TSGs for the non-hs rules
 $logger->info("Using TSG file " . basename($tsg_file));
 my $tsgs = read_tsgs($tsg_file);
@@ -138,6 +165,9 @@ for my $maf_file (@ARGV) {
     $logger->info( "Annotating '$maf_file'..." );
     my $results;
     $results = annotate_maf($maf_file, $annotation_data, $tsgs);
+
+    dd $results;
+    __exit__(__LINE__, 'stopped after parsing results.');
 
     # Print results.
     (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
@@ -198,7 +228,7 @@ sub annotate_maf {
         push(@results, "$header2\tMOI_Type\tOncogenicity\tEffect\n");
     }
 
-    my $var_count = 0;
+    my ($var_count, $filter_count) = 0;
     my %moi_count = (
         'Hotspots' => 0,
         'Deleterious' => 0,
@@ -217,13 +247,14 @@ sub annotate_maf {
     );
 
     while (<$fh>) {
-        if (DEBUG) {
-            print "\n";
-            print "-"x75, "\n";
-        }
-
         $var_count++;
+        print("\n", "-"x75, "\n") if DEBUG;
+
         chomp(my @elems = split(/\t/));
+
+        # Filter out SNPs, Intronic Variants, etc.
+        $filter_count++ and next unless filter_var(\@elems);
+
         my $moi_type = '.';
         my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c,$hgvs_p, $tscript_id, 
             $exon, $function) = @elems[0,4,5,6,10,12,34,36,37,38,50];
@@ -269,13 +300,38 @@ sub annotate_maf {
                 $effect));
     }
 
-    $logger->info("Total variants in file: $var_count." );
+    $logger->info(sprintf("Variant Summary\nTotal variants:\t%3s\nFiltered out:\t%3s\n" .
+            "Retained:\t\t%3s", $var_count, $filter_count, $var_count-$filter_count));
     my $moi_count_string;
     for (sort keys %moi_count) {
-        $moi_count_string .= sprintf("\t%-40s: %s\n", $_, $moi_count{$_});
+        $moi_count_string .= sprintf("%-42s: %s\n", $_, $moi_count{$_});
     }
     $logger->info("MOI Counts:\n$moi_count_string" );
+
     return \@results;
+}
+
+sub filter_var {
+    # Remove any variants that are SNPs, Intronic, etc.  May have already been
+    # filtered out prior to getting here, but nevertheless the buck stops here!
+    my $variant = shift;
+
+    # Functional annotation filter. 
+    if (grep { /$variant->[8]/ } qw(Intron UTR Silent Flank)) {
+        $logger->debug(sprintf("Filtering out variant %s because it's '%s'", 
+            __gen_hgvs($variant, 'hgvs_c')->[0], $variant->[8]));
+        return FALSE;
+    }
+
+    # GnomAD Filter
+    my @afs = sort { $b <=> $a } 
+        map {($variant->[$_]) ? $variant->[$_] : 0} (124..131); # gnomAD index
+    if ($afs[0] > 0.05) {
+        $logger->debug(sprintf("Filtering out variant %s because GnomAD Freq too". 
+            " high.", __gen_hgvs($variant, 'hgvs_c')->[0]));
+        return FALSE;
+    }
+    return TRUE;
 }
 
 sub map_variant_oncokb {
@@ -529,6 +585,46 @@ sub __commify {
     my $number = reverse shift;
     $number =~ s/(\d{3})(?=\d)(?!\d*\.)/$1,/g;
     return scalar reverse $number;
+}
+
+sub __gen_hgvs {
+    # Input the MAF variant string, and an optional hgvs output type, and 
+    # retrieve a fully formatted HGVS annotation string. Not including the
+    # output type will result in a list containg gHGVS, cHGVS, and pHGVS vals.
+    # Valid return types are 'hgvs_g', 'hgvs_c', 'hgvs_p'.
+    my ($var_elems, $ret_type) = @_;
+
+    my %g_refseq = (
+        'chr1' => 'NC_000001.10', 'chr2' => 'NC_000002.11','chr3' => 'NC_000003.11',
+        'chr4' => 'NC_000004.11', 'chr5' => 'NC_000005.9', 'chr6' => 'NC_000006.11',
+        'chr7' => 'NC_000007.13', 'chr8' => 'NC_000008.10', 'chr9'  => 'NC_000009.11',
+        'chr10' => 'NC_000010.10', 'chr11' => 'NC_000011.9', 'chr12' => 'NC_000012.11', 
+        'chr13' => 'NC_000013.10', 'chr14' => 'NC_000014.8', 'chr15' => 'NC_000015.9',
+        'chr16' => 'NC_000016.9', 'chr17' => 'NC_000017.10', 'chr18' => 'NC_000018.9',
+        'chr19' => 'NC_000019.9', 'chr20' => 'NC_000020.10', 'chr21' => 'NC_000021.8',
+        'chr22' => 'NC_000022.10', 'chrX' => 'NC_000023.10', 'chrY' => 'NC_000024.9',
+    );
+    my @wanted_index = qw(0 4 5 10 12 34 36 70);
+    my %data;
+
+    @data{qw(gene chr start ref alt cds aa refseq)} = @$var_elems[@wanted_index];
+
+    # TODO: What if we have more than one transcript ID?  How to handle that case?
+
+    # We have a splice variant or something that doesn't have a change.
+    $data{'aa'} = 'p.?' unless ($data{'aa'});
+
+    my %hgvs_annots = (
+        'hgvs_g' => "$g_refseq{$data{'chr'}}:g.$data{'start'}$data{'ref'}>" .
+           "$data{'alt'}",
+        'hgvs_c' => "$data{'refseq'}($data{'gene'}):$data{'cds'}",
+        'hgvs_p' => "$data{'refseq'}($data{'gene'}):$data{'aa'}",
+    );
+
+    ($ret_type) 
+        ? return [$hgvs_annots{$ret_type}] 
+        : return [@hgvs_annots{qw( hgvs_g hgvs_c hgvs_p )}];
+
 }
 
 sub __exit__ {
