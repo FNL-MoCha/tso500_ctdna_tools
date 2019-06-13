@@ -23,7 +23,7 @@ use constant DEBUG => 0;
 use constant TRUE => 1;
 use constant FALSE => 0;
 
-my $version = "v0.20.042619";
+my $version = "v0.21.051219";
 
 my $scriptdir = dirname($0);
 
@@ -46,11 +46,18 @@ EOT
 
 my $usage = <<"EOT";
 USAGE: $scriptname [options] -a <annotation_method> <maf_file(s)>
+    Filtering Options:
     -a, --annot        Method to use for annotation. Select from "hs_bed" or 
                        "oncokb".
-    -m, --mois_only    Only output variants that have passed our MOI rules.
     -b, --bed          Hotspots BED file to use for annotation. DEFAULT: $hs_bed
     -o, --oncokb_file  OncoKB file to use for annotation. DEFAULT: $oncokb_file
+
+    Output Options
+    -m, --mois_only    Only output variants that have passed our MOI rules.
+    -t, --trim_file    Output a trimmed data file in addition to the MAF file.
+                       Will only contain some of the most basic output data.
+
+    Other Options
     -v, --version      Version information
     -h, --help         Print this help information
 EOT
@@ -60,6 +67,7 @@ my $ver_info;
 my $outfile;
 my $annot_method;
 my $mois_only = 0;
+my $trim_file = 1;
 my $verbose;
 
 GetOptions( 
@@ -68,6 +76,7 @@ GetOptions(
     "bed|b=s"       => \$hs_bed,
     "oncokb|o=s"    => \$oncokb_file,
     "version"       => \$ver_info,
+    "trim_file|t"   => \$trim_file,
     "verbose|v"     => \$verbose,
     "help|h"        => \$help )
 or die $usage;
@@ -110,7 +119,7 @@ $verbose = 1 if DEBUG;
 # Set up a logger.
 my $logfile = 'tso500_moi_annotator_' . now('short') . '.log';
 my $logger_conf = qq(
-    log4perl.logger = DEBUG, Logfile, screen
+    log4perl.logger = DEBUG, Logfile
     log4perl.logger.main = DEBUG
 
     log4perl.appender.Logfile    = Log::Log4perl::Appender::File
@@ -151,7 +160,6 @@ if ($annot_method eq 'hs_bed') {
     $annotation_data = read_oncokb_file($oncokb_file);
 }
 
-
 # dd $annotation_data;
 # exit;
 
@@ -166,13 +174,10 @@ for my $maf_file (@ARGV) {
     my $results;
     $results = annotate_maf($maf_file, $annotation_data, $tsgs);
 
-    dd $results;
-    __exit__(__LINE__, 'stopped after parsing results.');
-
     # Print results.
     (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
     $logger->info( "Finished annotating. Printing results..." );
-    print_results($results, $new_file, $mois_only);
+    print_results($results, $new_file, $mois_only, $trim_file);
     $logger->info("Done with $maf_file!\n\n");
 }
 
@@ -191,22 +196,43 @@ sub read_oncokb_file {
 }
     
 sub print_results {
-    my ($data, $filename, $filter) = @_;
+    my ($data, $filename, $filter, $trim_file) = @_;
     my $filter_status;
     ($filter) ? ($filter_status = 'on') : ($filter_status = 'off');
+
 
     $logger->info( "Writing results to $filename (filter is $filter_status)");
     print "Writing results to $filename (filter is $filter_status)\n";
 
     open(my $outfh, ">", $filename);
 
+    my $trimfh;
+    if ($trim_file) {
+        $logger->info( "Also generating a trimmed output file.");
+        (my $trim_outfile = $filename) =~ s/\.maf/_trimmed.tsv/;
+        open($trimfh, ">", $trim_outfile);
+    };
+
     # Print headers
     print {$outfh} shift @$data;
-    print {$outfh} shift @$data;
+
+    my @header = split(/\t/, shift @$data);
+    my %header_elems = map{ $_ => $header[$_] } 0..$#header;
+    print {$outfh} join("\t", @header);
+
+    my @trim_indices = qw(0 4 5 6 8 9 10 12 13 15 34 35 37 85 71 72 76 99 123 
+        133 137 139 140);
+
+    # Get header for trim file if we want one.
+    print {$trimfh} join("\t", @header_elems{@trim_indices});
 
     for my $var (@$data) {
         next if $var =~ /\.$/ and $filter;
         print {$outfh} "$var\n";
+        if ($trim_file) {
+            my @trim_data = (split(/\t/, $var))[@trim_indices];
+            print {$trimfh} join("\t", @trim_data), "\n";
+        }
     }
 }
 
@@ -243,6 +269,7 @@ sub annotate_maf {
         'NOTCH1 Truncating Mutations' => 0,
         'NOTCH2 Truncating Mutations' => 0,
         'CCND1 Truncating Mutations' => 0,
+        'CCND3 Truncating Mutations' => 0,
         'PPM1D Truncating Mutations' => 0,
     );
 
@@ -349,6 +376,7 @@ sub map_variant_oncokb {
 
 sub read_tsgs {
     open(my $fh, "<", $tsg_file);
+    undef = readline($fh); # Throw out header.
     my $tsg_version = (split(' ', readline($fh)))[1];
     $logger->info("TSG lookup version: $tsg_version");
     return [map{ chomp; $_} <$fh>];
@@ -357,6 +385,10 @@ sub read_tsgs {
 sub run_nonhs_rules {
     # Look for non-hotspot MOIs in the data. Return after the first hit, even
     # though some variants may fit into more than one category.
+    # TODO:
+    #     It's not very flexible or maintainable to have these rules hardcoded.
+    #     Move this ruleset to a flat JSON file that can be read in and more
+    #     easily maintained.
     my ($gene, $location, $hgvs_p, $function, $moi_count, $tsgs) = @_;
 
     my $moi_type = '.';
@@ -385,16 +417,6 @@ sub run_nonhs_rules {
                 return ('NOTCH2 Truncating Mutations', 'Likely Oncogenic', 
                     'Likely Gain-of-function');
             }
-        }
-        elsif ($gene eq 'CCND1' && ($aa_start >= 256 and $aa_end <= 286)) {
-            $moi_count->{'CCND1 Truncating Mutations'}++;
-            return ('CCND1 Truncating Mutations', 'Likely Oncogenic', 
-                'Likely Gain-of-function');
-        }
-        elsif ($gene eq 'PPM1D' && ($aa_end >= 422 and $aa_end <= 605)) {
-            $moi_count->{'PPM1D Truncating Mutations'}++;
-            return ('PPM1D Truncating Mutations', 'Likely Oncogenic', 
-                'Likely Gain-of-function');
         } else {
             $moi_count->{'Deleterious'}++;
             return ('Deleterious in TSG', 'Likely Onogenic', 
@@ -436,6 +458,30 @@ sub run_nonhs_rules {
         $moi_count->{'TP53 DBD Mutations'}++;
         return ('TP53 DBD Mutations', 'Oncogenic', 'Loss-of-function');
     }
+    # CCND1 Truncating
+    elsif ($gene eq 'CCND1' && ($aa_start >= 256 and $aa_end <= 286)) {
+        $moi_count->{'CCND1 Truncating Mutations'}++;
+        return ('CCND1 Truncating Mutations', 'Likely Oncogenic', 
+            'Likely Gain-of-function');
+    }
+    # CCND3 Truncating 
+    elsif ($gene eq 'CCND3' && ($aa_start >= 286 and $aa_end <= 292)) {
+        $moi_count->{'CCND3 Truncating Mutations'}++;
+        return ('CCND3 Truncating Mutations', 'Likely Oncogenic', 
+            'Likely Gain-of-function');
+    }
+    # CXCR4 Truncating.
+    elsif ($gene eq 'CXCR4' && ($aa_start >= 332 and $aa_end <= 352)) {
+        $moi_count->{'CXCR4 Truncating Mutations'}++;
+        return ('CXCR4 Truncating Mutations', 'Likely Oncogenic', 
+            'Likely Gain-of-function');
+    }
+    # PPM1D Truncating.
+    elsif ($gene eq 'PPM1D' && ($aa_end >= 422 and $aa_end <= 605)) {
+        $moi_count->{'PPM1D Truncating Mutations'}++;
+        return ('PPM1D Truncating Mutations', 'Likely Oncogenic', 
+            'Likely Gain-of-function');
+    } 
     # PIK3CA Exon 20 mutations.
     elsif ($gene eq 'PIK3CA' and $exon eq 20) {
         $moi_count->{'PIK3CA Exon 20 Mutations'}++;
@@ -464,6 +510,23 @@ sub run_nonhs_rules {
                     'Likely Gain-of-function');
             }
         }
+    }
+    # JAK2 Exon 12 Alterations
+    elsif ($gene eq 'JAK2' and $exon eq '12') {
+        $moi_count->{'JAK2 Exon 12 Alterations'}++;
+        return ("JAK2 Exon 12 alterations", "Likely Oncogenic", "Gain-of-function");
+    }
+    # MPL Exon 10 mutations.
+    elsif ($gene eq 'MPL' and $exon eq '10') {
+        $moi_count->{'MPL Exon 10 Mutations'}++;
+        return ("MPL Exon 10 mutations", "Likely Oncogenic", 
+            "Likely Gain-of-function");
+    }
+    # FLT3 Kinase Domain mutations.
+    elsif ($gene eq 'FLT3' && ($aa_start >= 604 and $aa_end <= 958)) {
+        $moi_count->{'FLT3 TyrK mutations'}++;
+        return ("FLT3 TyrK Domain mutions", "Likely Oncogenic", 
+            "Likely Gain-of-function");
     }
     return ($moi_type, '.', '.');
 }
