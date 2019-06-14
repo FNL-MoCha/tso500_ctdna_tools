@@ -23,7 +23,7 @@ use constant DEBUG => 0;
 use constant TRUE => 1;
 use constant FALSE => 0;
 
-my $version = "v0.21.051219";
+my $version = "v0.22.061419";
 
 my $scriptdir = dirname($0);
 
