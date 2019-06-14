@@ -75,9 +75,9 @@ GetOptions(
     "mois_only|m"   => \$mois_only,
     "bed|b=s"       => \$hs_bed,
     "oncokb|o=s"    => \$oncokb_file,
-    "version"       => \$ver_info,
+    "version|v"     => \$ver_info,
     "trim_file|t"   => \$trim_file,
-    "verbose|v"     => \$verbose,
+    "Verbose|V"     => \$verbose,
     "help|h"        => \$help )
 or die $usage;
 
