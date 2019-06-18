@@ -255,130 +255,68 @@ sub annotate_maf2 {
     my $maf_ver = $csv->getline($fh);
     my $header = $csv->getline($fh);
 
-    if ($annot_method eq 'hs_bed') {
-        push(@$header, qw(MOI_Type Count));
-    }
-    elsif ($annot_method eq 'oncokb') {
-        push(@$header, qw(MOI_Type Oncogenicity Effect));
-    }
-    my ($var_count, $filter_count) = 0;
+    my ($var_count, $filter_count) = (0, 0);
     # TODO: Redo this. Have a set list of categories or something and just have
     # the hash generated as categories are filed rather than this kludgy hard
     # coded way.
     my %moi_count = (
-        'Hotspots' => 0,
-        'Deleterious' => 0,
-        'EGFR Inframe Indel' => 0,
-        'ERBB2 Inframe Indel' => 0,
+        'Hotspots'                                 => 0,
+        'Deleterious in TSG'                       => 0,
+        'EGFR Inframe Indel'                       => 0,
+        'ERBB2 Inframe Indel'                      => 0,
         'KIT Exons 9, 11, 13, 14, or 17 Mutations' => 0,
-        'TP53 DBD Mutations' => 0,
-        'PIK3CA Exon 20 Mutations' => 0,
-        'MED12 Exons 1 or 2 Mutations' => 0,
-        'CALR C-terminal truncating' => 0,
-        'CALR Exon 9 indels' => 0,
-        'NOTCH1 Truncating Mutations' => 0,
-        'NOTCH2 Truncating Mutations' => 0,
-        'CCND1 Truncating Mutations' => 0,
-        'CCND3 Truncating Mutations' => 0,
-        'PPM1D Truncating Mutations' => 0,
+        'TP53 DBD Mutations'                       => 0,
+        'PIK3CA Exon 20 Mutations'                 => 0,
+        'MED12 Exons 1 or 2 Mutations'             => 0,
+        'CALR C-terminal truncating'               => 0,
+        'CALR Exon 9 indels'                       => 0,
+        'NOTCH1 Truncating Mutations'              => 0,
+        'NOTCH2 Truncating Mutations'              => 0,
+        'CCND1 Truncating Mutations'               => 0,
+        'CCND3 Truncating Mutations'               => 0,
+        'CXCR4 Truncating Mutations'               => 0,
+        'PPM1D Truncating Mutations'               => 0,
+        'JAK2 Exon 12 Alterations'                 => 0,
+        'MPL Exon 10 Alterations'                  => 0,
+        'FLT3 TyrK Domain Mutations'               => 0,
     );
 
     while (my $elems = $csv->getline($fh)) {
         $var_count++;
-        print("\n", "-"x75, "\n") if DEBUG;
 
         my %var_data;
         @var_data{@$header} = @$elems;
 
-        next unless $var_data{'Hugo_Symbol'} eq 'MTOR';
-
-        # Filter out SNPs, Intronic Variants, etc.
-        $filter_count++ and next unless filter_var2(\%var_data, 'gnomad');
-        next;
-    }
-    __exit__(__LINE__, "");
-
-=cut
-        my $moi_type = '.';
-        my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c,$hgvs_p, $tscript_id, 
-            $exon, $function) = @elems[0,4,5,6,10,12,34,36,37,38,50];
-
-        # Try to get a hotspot ID
-        my ($hsid, $oncogenicity, $effect); 
-        # Annotate with a Hotspots BED file
-        if ($annot_method eq 'hs_bed') {
-
-            print "testing $chr:$start-$end:$ref>$alt\n" if DEBUG;
-            $hsid = map_variant_hs($chr, $start, $end, $ref, $alt, 
-                $hotspots);
-        } 
-        # Annotate with an OncoKB Lookup file. 
-        else {
-            print "testing $gene:$hgvs_p\n" if DEBUG;
-            ($hsid, $oncogenicity, $effect) = map_variant_oncokb($gene, $hgvs_p,
-                $hotspots);
-        }
-=cut
-}
-
-sub annotate_maf {
-    my ($maf, $hotspots, $tsgs) = @_;
-    my @results;
-
-    open(my $fh, "<", $maf);
-    # will have two header lines to deal with before we get to the data.
-    my $header1 = <$fh>;
-    push(@results, $header1);
-
-    # Add moi_type to header
-    chomp(my $header2 = <$fh>);
-    if ($annot_method eq 'hs_bed') {
-        push(@results, "$header2\tMOI_Type\tCount\n");
-    } 
-    elsif ($annot_method eq 'oncokb') {
-        push(@results, "$header2\tMOI_Type\tOncogenicity\tEffect\n");
-    }
-
-    my ($var_count, $filter_count) = 0;
-    my %moi_count = (
-        'Hotspots' => 0,
-        'Deleterious' => 0,
-        'EGFR Inframe Indel' => 0,
-        'ERBB2 Inframe Indel' => 0,
-        'KIT Exons 9, 11, 13, 14, or 17 Mutations' => 0,
-        'TP53 DBD Mutations' => 0,
-        'PIK3CA Exon 20 Mutations' => 0,
-        'MED12 Exons 1 or 2 Mutations' => 0,
-        'CALR C-terminal truncating' => 0,
-        'CALR Exon 9 indels' => 0,
-        'NOTCH1 Truncating Mutations' => 0,
-        'NOTCH2 Truncating Mutations' => 0,
-        'CCND1 Truncating Mutations' => 0,
-        'CCND3 Truncating Mutations' => 0,
-        'PPM1D Truncating Mutations' => 0,
-    );
-
-    while (<$fh>) {
-        $var_count++;
+        # DEBUG
+        # next unless $var_data{'Hugo_Symbol'} eq 'ID3';
         print("\n", "-"x75, "\n") if DEBUG;
 
-        chomp(my @elems = split(/\t/));
-
         # Filter out SNPs, Intronic Variants, etc.
-        $filter_count++ and next unless filter_var(\@elems);
-
-        my $moi_type = '.';
-        my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c,$hgvs_p, $tscript_id, 
-            $exon, $function) = @elems[0,4,5,6,10,12,34,36,37,38,50];
+        $filter_count++ and next unless filter_var(\%var_data, 'gnomad');
+        print "Filter count is now: $filter_count\n";
 
         # Try to get a hotspot ID
         my ($hsid, $oncogenicity, $effect); 
+        my $moi_type = '.';
+
+        my @wanted_terms = qw(Hugo_Symbol Chromosome Start_Position End_Position 
+            Reference_Allele Tumor_Seq_Allele2 HGVSc HGVSp_Short Transcript_ID 
+            Exon_Number Consequence);
+        my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c, $hgvs_p, $tscript_id, 
+            $exon, $function) = @var_data{@wanted_terms};
+
+        # If splice mutation, location may be intronic, and we need to have a
+        # val for 'exon' anyway.
+        $exon = 'splicesite' if ($exon eq '' and $function =~ /splice/);
+        do { 
+            print "$warn: Still no exon info for var: \n";
+            dd @var_data{@wanted_terms} 
+        } and exit if $exon eq '';
+
         # Annotate with a Hotspots BED file
         if ($annot_method eq 'hs_bed') {
-
             print "testing $chr:$start-$end:$ref>$alt\n" if DEBUG;
-            $hsid = map_variant_hs($chr, $start, $end, $ref, $alt, 
-                $hotspots);
+            $hsid = map_variant_hs($chr, $start, $end, $ref, $alt, $hotspots);
         } 
         # Annotate with an OncoKB Lookup file. 
         else {
@@ -391,29 +329,33 @@ sub annotate_maf {
             print "> $tscript_id($gene):$hgvs_c:$hgvs_p: maps to ==> $hsid\n\n";
         }
 
-        $elems[110] = $hsid;
+        $var_data{'variant_id'} = $hsid;
         if ($hsid ne '.') {
             $moi_type = 'Hotspot';
             $moi_count{'Hotspots'}++;
-        } 
-        else {
-            ($moi_type, $oncogenicity, $effect) = run_nonhs_rules($gene, $exon, 
-                $hgvs_p, $function, \%moi_count, $tsgs);
+        } else {
+            # TODO: Fix the way the "moi_count" hash is handled. I think maybe
+            # better to define in run_nonhs_rules(), and then return data here.
+            ($moi_type, $oncogenicity, $effect) = run_nonhs_rules(
+                $gene, $exon, $hgvs_p, $function, \%moi_count, $tsgs);
         }
 
+        @var_data{qw(MOI_Type Oncogenicity Effect)} = ($moi_type, $oncogenicity,
+            $effect);
+        
         if (DEBUG) {
             print "MOI category: $moi_type\n";
+            dd @var_data{qw(Hugo_Symbol MOI_Type Oncogenicity Effect)};
             print "-"x75;
             print "\n\n";
         }
-        ($annot_method eq 'hs_bed') 
-            ? push(@results, join("\t", @elems, $moi_type))
-            : push(@results, join("\t", @elems, $moi_type, $oncogenicity, 
-                $effect));
+        push(@results, {%var_data});
     }
 
-    $logger->info(sprintf("Variant Summary\nTotal variants:\t%3s\nFiltered out:\t%3s\n" .
-            "Retained:\t\t%3s", $var_count, $filter_count, $var_count-$filter_count));
+    $logger->info(sprintf("Variant Summary\nTotal variants:\t%3s\nFiltered " .
+        "out:\t%3s\nRetained:\t\t%3s", $var_count, $filter_count, 
+        $var_count-$filter_count)
+    );
     my $moi_count_string;
     for (sort keys %moi_count) {
         $moi_count_string .= sprintf("%-42s: %s\n", $_, $moi_count{$_});
@@ -423,14 +365,15 @@ sub annotate_maf {
     return \@results;
 }
 
-sub filter_var2 {
+sub filter_var {
     # Remove any variants that are SNPs, Intronic, etc.  May have already been
     # filtered out prior to getting here, but nevertheless the buck stops here!
     my ($variant, $pop_filter) = @_;
 
     # Functional annotation filter. 
     my $var_class = $variant->{'Variant_Classification'};
-    if (grep { /$var_class/} qw(Intron UTR Silent Flank IGR)) {
+    print "$var_class\n";
+    if (grep { $var_class =~ /$_/} qw(Intron UTR Silent Flank IGR)) {
         $logger->debug(sprintf("Filtering out variant %s because it's '%s'", 
             __gen_hgvs($variant, 'hgvs_c')->[0], $var_class));
         return FALSE;
@@ -452,32 +395,8 @@ sub filter_var2 {
     my @pop_freqs = sort {$b <=> $a } 
         map{ ($variant->{$_}) ? $variant->{$_} : 0 } @{$pop_fields{$pop_filter}};
     if ($pop_freqs[0] > $POPULATION_THRESHOLD) {
-        $logger->debug(sprintf("Filtering out variant %s because %s frequency ",
-                "too high.", __gen_hgvs($variant, 'hgvs_c')->[0], $pop_filter));
-        return FALSE;
-    }
-    return TRUE;
-}
-
-# TODO: REmove me
-sub filter_var {
-    # Remove any variants that are SNPs, Intronic, etc.  May have already been
-    # filtered out prior to getting here, but nevertheless the buck stops here!
-    my $variant = shift;
-
-    # Functional annotation filter. 
-    if (grep { /$variant->[8]/ } qw(Intron UTR Silent Flank)) {
-        $logger->debug(sprintf("Filtering out variant %s because it's '%s'", 
-            __gen_hgvs($variant, 'hgvs_c')->[0], $variant->[8]));
-        return FALSE;
-    }
-
-    # GnomAD Filter
-    my @afs = sort { $b <=> $a } 
-        map {($variant->[$_]) ? $variant->[$_] : 0} (124..131); # gnomAD index
-    if ($afs[0] > 0.05) {
-        $logger->debug(sprintf("Filtering out variant %s because GnomAD Freq too". 
-            " high.", __gen_hgvs($variant, 'hgvs_c')->[0]));
+        $logger->debug(sprintf("Filtering out variant %s because %s frequency" .
+            " is too high.", __gen_hgvs($variant, 'hgvs_c')->[0], $pop_filter));
         return FALSE;
     }
     return TRUE;
@@ -540,7 +459,7 @@ sub run_nonhs_rules {
                     'Likely Gain-of-function');
             }
         } else {
-            $moi_count->{'Deleterious'}++;
+            $moi_count->{'Deleterious in TSG'}++;
             return ('Deleterious in TSG', 'Likely Onogenic', 
                 'Likely Loss-of-function');
         }
@@ -640,13 +559,13 @@ sub run_nonhs_rules {
     }
     # MPL Exon 10 mutations.
     elsif ($gene eq 'MPL' and $exon eq '10') {
-        $moi_count->{'MPL Exon 10 Mutations'}++;
+        $moi_count->{'MPL Exon 10 Alterations'}++;
         return ("MPL Exon 10 mutations", "Likely Oncogenic", 
             "Likely Gain-of-function");
     }
     # FLT3 Kinase Domain mutations.
     elsif ($gene eq 'FLT3' && ($aa_start >= 604 and $aa_end <= 958)) {
-        $moi_count->{'FLT3 TyrK mutations'}++;
+        $moi_count->{'FLT3 TyrK Domain Mutations'}++;
         return ("FLT3 TyrK Domain mutions", "Likely Oncogenic", 
             "Likely Gain-of-function");
     }
