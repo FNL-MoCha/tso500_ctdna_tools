@@ -18,12 +18,15 @@ use Sort::Versions;
 use Term::ANSIColor; # Optional colorized output to terminal.
 use Log::Log4perl qw(get_logger);
 use DateTime;
+use Text::CSV;
 
-use constant DEBUG => 0;
+use constant DEBUG => 1;
 use constant TRUE => 1;
 use constant FALSE => 0;
 
-my $version = "v0.22.061419";
+my $POPULATION_THRESHOLD = 0.05;
+
+my $version = "v0.24.061819";
 
 my $scriptdir = dirname($0);
 
@@ -172,7 +175,13 @@ for my $maf_file (@ARGV) {
     print "Annotating '$maf_file'...\n" if DEBUG;
     $logger->info( "Annotating '$maf_file'..." );
     my $results;
-    $results = annotate_maf($maf_file, $annotation_data, $tsgs);
+    # XXX
+    # $results = annotate_maf($maf_file, $annotation_data, $tsgs);
+    $results = annotate_maf2($maf_file, $annotation_data, $tsgs);
+
+    # XXX
+    dd $results;
+    __exit__(__LINE__, '');
 
     # Print results.
     (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
@@ -186,7 +195,7 @@ sub read_oncokb_file {
     my %data;
     open(my $fh, "<", $oncokb_file);
     my $okb_version = (split(' ', readline($fh)))[1];
-    $logger->info("OncoKB lookup file version: $version.");
+    $logger->info("OncoKB lookup file version: v$okb_version.");
     my $header = <$fh>;
     while (<$fh>) {
         chomp(my @fields = split(/\t/));
@@ -234,6 +243,80 @@ sub print_results {
             print {$trimfh} join("\t", @trim_data), "\n";
         }
     }
+}
+
+sub annotate_maf2 {
+    my ($maf, $hotspots, $tsgs) = @_;
+    my @results;
+
+    my $csv = Text::CSV->new({ sep_char => "\t" });
+
+    open(my $fh, "<", $maf);
+    my $maf_ver = $csv->getline($fh);
+    my $header = $csv->getline($fh);
+
+    if ($annot_method eq 'hs_bed') {
+        push(@$header, qw(MOI_Type Count));
+    }
+    elsif ($annot_method eq 'oncokb') {
+        push(@$header, qw(MOI_Type Oncogenicity Effect));
+    }
+    my ($var_count, $filter_count) = 0;
+    # TODO: Redo this. Have a set list of categories or something and just have
+    # the hash generated as categories are filed rather than this kludgy hard
+    # coded way.
+    my %moi_count = (
+        'Hotspots' => 0,
+        'Deleterious' => 0,
+        'EGFR Inframe Indel' => 0,
+        'ERBB2 Inframe Indel' => 0,
+        'KIT Exons 9, 11, 13, 14, or 17 Mutations' => 0,
+        'TP53 DBD Mutations' => 0,
+        'PIK3CA Exon 20 Mutations' => 0,
+        'MED12 Exons 1 or 2 Mutations' => 0,
+        'CALR C-terminal truncating' => 0,
+        'CALR Exon 9 indels' => 0,
+        'NOTCH1 Truncating Mutations' => 0,
+        'NOTCH2 Truncating Mutations' => 0,
+        'CCND1 Truncating Mutations' => 0,
+        'CCND3 Truncating Mutations' => 0,
+        'PPM1D Truncating Mutations' => 0,
+    );
+
+    while (my $elems = $csv->getline($fh)) {
+        $var_count++;
+        print("\n", "-"x75, "\n") if DEBUG;
+
+        my %var_data;
+        @var_data{@$header} = @$elems;
+
+        # Filter out SNPs, Intronic Variants, etc.
+        $filter_count++ and next unless filter_var2(\%var_data, 'gnomad');
+        next;
+    }
+    __exit__(__LINE__, "");
+
+=cut
+        my $moi_type = '.';
+        my ($gene, $chr, $start, $end, $ref, $alt, $hgvs_c,$hgvs_p, $tscript_id, 
+            $exon, $function) = @elems[0,4,5,6,10,12,34,36,37,38,50];
+
+        # Try to get a hotspot ID
+        my ($hsid, $oncogenicity, $effect); 
+        # Annotate with a Hotspots BED file
+        if ($annot_method eq 'hs_bed') {
+
+            print "testing $chr:$start-$end:$ref>$alt\n" if DEBUG;
+            $hsid = map_variant_hs($chr, $start, $end, $ref, $alt, 
+                $hotspots);
+        } 
+        # Annotate with an OncoKB Lookup file. 
+        else {
+            print "testing $gene:$hgvs_p\n" if DEBUG;
+            ($hsid, $oncogenicity, $effect) = map_variant_oncokb($gene, $hgvs_p,
+                $hotspots);
+        }
+=cut
 }
 
 sub annotate_maf {
@@ -338,6 +421,43 @@ sub annotate_maf {
     return \@results;
 }
 
+sub filter_var2 {
+    # Remove any variants that are SNPs, Intronic, etc.  May have already been
+    # filtered out prior to getting here, but nevertheless the buck stops here!
+    my ($variant, $pop_filter) = @_;
+
+    # Functional annotation filter. 
+    my $var_class = $variant->{'Variant_Classification'};
+    if (grep { /$var_class/} qw(Intron UTR Silent Flank)) {
+        $logger->debug(sprintf("Filtering out variant %s because it's '%s'", 
+            __gen_hgvs($variant, 'hgvs_c')->[0], $var_class));
+        return FALSE;
+    }
+
+    # Give some options to the population data you can use to filter. 
+    my %pop_fields = (
+        'gnomad'  => [qw(gnomAD_AF gnomAD_AFR_AF gnomAD_AMR_AF gnomAD_ASJ_AF
+            gnomAD_EAS_AF gnomAD_FIN_AF gnomAD_NFE_AF gnomAD_OTH_AF 
+            gnomAD_SAS_AF)],
+        'exac'    => [qw(ExAC_AF ExAC_AF_Adj ExAC_AF_AFR ExAC_AF_AMR ExAC_AF_EAS
+            ExAC_AF_FIN ExAC_AF_NFE ExAC_AF_OTH ExAC_AF_SAS)],
+        '1000G'   => [qw(1000G_ALL 1000G_AFR 1000G_AMR 1000G_EAS 1000G_EUR
+            1000G_SAS)],
+    );
+
+    # Get the population frequency data for the set requested, and sort them
+    # largest to smallest for comparison.
+    my @pop_freqs = sort {$b <=> $a } 
+        map{ ($variant->{$_}) ? $variant->{$_} : 0 } @{$pop_fields{$pop_filter}};
+    if ($pop_freqs[0] > $POPULATION_THRESHOLD) {
+        $logger->debug(sprintf("Filtering out variant %s because %s frequency ",
+                "too high.", __gen_hgvs($variant, 'hgvs_c')->[0], $pop_filter));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+# TODO: REmove me
 sub filter_var {
     # Remove any variants that are SNPs, Intronic, etc.  May have already been
     # filtered out prior to getting here, but nevertheless the buck stops here!
@@ -376,7 +496,7 @@ sub map_variant_oncokb {
 
 sub read_tsgs {
     open(my $fh, "<", $tsg_file);
-    undef = readline($fh); # Throw out header.
+    readline($fh); # Throw out header.
     my $tsg_version = (split(' ', readline($fh)))[1];
     $logger->info("TSG lookup version: $tsg_version");
     return [map{ chomp; $_} <$fh>];
@@ -658,19 +778,22 @@ sub __gen_hgvs {
     my ($var_elems, $ret_type) = @_;
 
     my %g_refseq = (
-        'chr1' => 'NC_000001.10', 'chr2' => 'NC_000002.11','chr3' => 'NC_000003.11',
-        'chr4' => 'NC_000004.11', 'chr5' => 'NC_000005.9', 'chr6' => 'NC_000006.11',
-        'chr7' => 'NC_000007.13', 'chr8' => 'NC_000008.10', 'chr9'  => 'NC_000009.11',
-        'chr10' => 'NC_000010.10', 'chr11' => 'NC_000011.9', 'chr12' => 'NC_000012.11', 
-        'chr13' => 'NC_000013.10', 'chr14' => 'NC_000014.8', 'chr15' => 'NC_000015.9',
-        'chr16' => 'NC_000016.9', 'chr17' => 'NC_000017.10', 'chr18' => 'NC_000018.9',
-        'chr19' => 'NC_000019.9', 'chr20' => 'NC_000020.10', 'chr21' => 'NC_000021.8',
-        'chr22' => 'NC_000022.10', 'chrX' => 'NC_000023.10', 'chrY' => 'NC_000024.9',
+        chr1 => 'NC_000001.10', chr2 => 'NC_000002.11', chr3 => 'NC_000003.11',
+        chr4 => 'NC_000004.11', chr5 => 'NC_000005.9', chr6 => 'NC_000006.11',
+        chr7 => 'NC_000007.13', chr8 => 'NC_000008.10', chr9  => 'NC_000009.11',
+        chr10 => 'NC_000010.10', chr11 => 'NC_000011.9', chr12 => 'NC_000012.11', 
+        chr13 => 'NC_000013.10', chr14 => 'NC_000014.8', chr15 => 'NC_000015.9',
+        chr16 => 'NC_000016.9', chr17 => 'NC_000017.10', chr18 => 'NC_000018.9',
+        chr19 => 'NC_000019.9', chr20 => 'NC_000020.10', chr21 => 'NC_000021.8',
+        chr22 => 'NC_000022.10', chrX => 'NC_000023.10', chrY => 'NC_000024.9',
     );
-    my @wanted_index = qw(0 4 5 10 12 34 36 70);
+    # TODO: remove me
+    # my @wanted_index = qw(0 4 5 10 12 34 36 70);
+    my @wanted_keys = qw(Hugo_Symbol Chromosome Start_Position Reference_Allele
+        Tumor_Seq_Allele2 HGVSp HGVSp_Short RefSeq);
     my %data;
 
-    @data{qw(gene chr start ref alt cds aa refseq)} = @$var_elems[@wanted_index];
+    @data{qw(gene chr start ref alt cds aa refseq)} = @$var_elems[@wanted_keys];
 
     # TODO: What if we have more than one transcript ID?  How to handle that case?
 
