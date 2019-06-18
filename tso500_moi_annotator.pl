@@ -98,9 +98,9 @@ help if $help;
 version if $ver_info;
  
 # Add some color output info
-my $err  = colored("ERROR:", 'bold red on_black');
-my $warn = colored("WARN:", 'bold yellow on_black');
-my $info = colored("INFO:", 'bold cyan on_black');
+my $err   = colored("ERROR:", 'bold red on_black');
+my $warn  = colored("WARN:", 'bold yellow on_black');
+my $info  = colored("INFO:", 'bold cyan on_black');
 my $debug = colored("DEBUG:", 'bold magenta on_black');
 
 # Make sure enough args passed to script
@@ -122,7 +122,7 @@ $verbose = 1 if DEBUG;
 # Set up a logger.
 my $logfile = 'tso500_moi_annotator_' . now('short') . '.log';
 my $logger_conf = qq(
-    log4perl.logger = DEBUG, Logfile
+    log4perl.logger = DEBUG, Logfile, Screen
     log4perl.logger.main = DEBUG
 
     log4perl.appender.Logfile    = Log::Log4perl::Appender::File
@@ -134,11 +134,11 @@ my $logger_conf = qq(
 );
 
 my $extra_conf = qq(
-    log4perl.appender.screen = Log::Log4perl::Appender::Screen
-    log4perl.appender.screen.stderr = 0
-    log4perl.appender.screen.layout = Log::Log4perl::Layout::PatternLayout
-    log4perl.appender.screen.layout.message_chomp_before_newlist = 0
-    log4perl.appender.screen.layout.ConversionPattern = %d [ %p ]: %m{indent=4}%n
+    log4perl.appender.Screen = Log::Log4perl::Appender::Screen
+    log4perl.appender.Screen.stderr = 0
+    log4perl.appender.Screen.layout = Log::Log4perl::Layout::PatternLayout
+    log4perl.appender.Screen.layout.message_chomp_before_newlist = 0
+    log4perl.appender.Screen.layout.ConversionPattern = %d [ %p ]: %m{indent=4}%n
 );
 
 $logger_conf .= $extra_conf if $verbose;
@@ -290,6 +290,8 @@ sub annotate_maf2 {
         my %var_data;
         @var_data{@$header} = @$elems;
 
+        next unless $var_data{'Hugo_Symbol'} eq 'MTOR';
+
         # Filter out SNPs, Intronic Variants, etc.
         $filter_count++ and next unless filter_var2(\%var_data, 'gnomad');
         next;
@@ -428,7 +430,7 @@ sub filter_var2 {
 
     # Functional annotation filter. 
     my $var_class = $variant->{'Variant_Classification'};
-    if (grep { /$var_class/} qw(Intron UTR Silent Flank)) {
+    if (grep { /$var_class/} qw(Intron UTR Silent Flank IGR)) {
         $logger->debug(sprintf("Filtering out variant %s because it's '%s'", 
             __gen_hgvs($variant, 'hgvs_c')->[0], $var_class));
         return FALSE;
@@ -787,13 +789,11 @@ sub __gen_hgvs {
         chr19 => 'NC_000019.9', chr20 => 'NC_000020.10', chr21 => 'NC_000021.8',
         chr22 => 'NC_000022.10', chrX => 'NC_000023.10', chrY => 'NC_000024.9',
     );
-    # TODO: remove me
-    # my @wanted_index = qw(0 4 5 10 12 34 36 70);
     my @wanted_keys = qw(Hugo_Symbol Chromosome Start_Position Reference_Allele
         Tumor_Seq_Allele2 HGVSp HGVSp_Short RefSeq);
     my %data;
 
-    @data{qw(gene chr start ref alt cds aa refseq)} = @$var_elems[@wanted_keys];
+    @data{qw(gene chr start ref alt cds aa refseq)} = @$var_elems{@wanted_keys};
 
     # TODO: What if we have more than one transcript ID?  How to handle that case?
 
@@ -810,7 +810,6 @@ sub __gen_hgvs {
     ($ret_type) 
         ? return [$hgvs_annots{$ret_type}] 
         : return [@hgvs_annots{qw( hgvs_g hgvs_c hgvs_p )}];
-
 }
 
 sub __exit__ {
