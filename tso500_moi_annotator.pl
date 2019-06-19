@@ -20,14 +20,13 @@ use Log::Log4perl qw(get_logger);
 use DateTime;
 use Text::CSV;
 
-use constant DEBUG => 1;
+use constant DEBUG => 0;
 use constant TRUE => 1;
 use constant FALSE => 0;
 
 my $POPULATION_THRESHOLD = 0.05;
 
-my $version = "v0.24.061819";
-
+my $version = "v0.26.061919";
 my $scriptdir = dirname($0);
 
 # Default lookup files.
@@ -53,12 +52,14 @@ USAGE: $scriptname [options] -a <annotation_method> <maf_file(s)>
     -a, --annot        Method to use for annotation. Select from "hs_bed" or 
                        "oncokb".
     -b, --bed          Hotspots BED file to use for annotation. DEFAULT: $hs_bed
-    -o, --oncokb_file  OncoKB file to use for annotation. DEFAULT: $oncokb_file
+    -O, --Oncokb_file  OncoKB file to use for annotation. DEFAULT: $oncokb_file
 
     Output Options
     -m, --mois_only    Only output variants that have passed our MOI rules.
     -t, --trim_file    Output a trimmed data file in addition to the MAF file.
                        Will only contain some of the most basic output data.
+    -o, --outfile      Write output to custom filename rather than default 
+                       "annotated.maf" file.
 
     Other Options
     -v, --version      Version information
@@ -77,9 +78,10 @@ GetOptions(
     "annot|a=s"     => \$annot_method,
     "mois_only|m"   => \$mois_only,
     "bed|b=s"       => \$hs_bed,
-    "oncokb|o=s"    => \$oncokb_file,
+    "Oncokb|O=s"    => \$oncokb_file,
     "version|v"     => \$ver_info,
     "trim_file|t"   => \$trim_file,
+    "outfile|o=s"   => \$outfile,
     "Verbose|V"     => \$verbose,
     "help|h"        => \$help )
 or die $usage;
@@ -121,8 +123,10 @@ $verbose = 1 if DEBUG;
 
 # Set up a logger.
 my $logfile = 'tso500_moi_annotator_' . now('short') . '.log';
+my $loggers;
+(DEBUG) ? ($loggers = 'DEBUG, Logfile, Screen') : ($loggers = 'DEBUG, Logfile');
 my $logger_conf = qq(
-    log4perl.logger = DEBUG, Logfile, Screen
+    log4perl.logger = $loggers
     log4perl.logger.main = DEBUG
 
     log4perl.appender.Logfile    = Log::Log4perl::Appender::File
@@ -149,7 +153,6 @@ my $intro_str = sprintf("\n%s\n\t\t    Starting TSO500 MOI Annotation Script\n%s
     "="x80, "="x80);
 $logger->info($intro_str);
 
-
 ################------ END Arg Parsing and Script Setup ------#################
 
 # Load up annotation data from either hotspots BED or oncokb file.
@@ -175,16 +178,13 @@ for my $maf_file (@ARGV) {
     print "Annotating '$maf_file'...\n" if DEBUG;
     $logger->info( "Annotating '$maf_file'..." );
     my $results;
-    # XXX
-    # $results = annotate_maf($maf_file, $annotation_data, $tsgs);
-    $results = annotate_maf2($maf_file, $annotation_data, $tsgs);
-
-    # XXX
-    dd $results;
-    __exit__(__LINE__, '');
+    $results = annotate_maf($maf_file, $annotation_data, $tsgs);
 
     # Print results.
-    (my $new_file = $maf_file) =~ s/\.maf/.annotated.maf/;
+    my $new_file;
+    ($outfile)
+        ? ($new_file = $outfile)
+        : (($new_file = $maf_file) =~ s/\.maf/.annotated.maf/);
     $logger->info( "Finished annotating. Printing results..." );
     print_results($results, $new_file, $mois_only, $trim_file);
     $logger->info("Done with $maf_file!\n\n");
@@ -205,55 +205,63 @@ sub read_oncokb_file {
 }
     
 sub print_results {
+    # TODO: Do we want to use Text::CSV here to ensure good formatting, or would
+    # it be better not to worry about it?  
     my ($data, $filename, $filter, $trim_file) = @_;
+    
     my $filter_status;
     ($filter) ? ($filter_status = 'on') : ($filter_status = 'off');
-
-
     $logger->info( "Writing results to $filename (filter is $filter_status)");
     print "Writing results to $filename (filter is $filter_status)\n";
 
     open(my $outfh, ">", $filename);
 
+    my @trim_fields = qw(Hugo_Symbol Entrez_Gene_Id Chromosome Start_Position
+         End_Position Strand Variant_Classification Variant_Type Reference_Allele
+         Tumor_Seq_Allele1 Tumor_Seq_Allele2 Tumor_Sample_Barcode 
+         Matched_Norm_Sample_Barcode HGVSc HGVSp HGVSp_Short Transcript_ID 
+         t_depth t_ref_count t_alt_count n_depth n_ref_count n_alt_count 
+         Existing_variation RefSeq SIFT PolyPhen ExAC_AF gnomAD_AF i_TumorVAF
+         MOI_Type Oncogenicity Effect
+    );
+
     my $trimfh;
     if ($trim_file) {
         $logger->info( "Also generating a trimmed output file.");
-        (my $trim_outfile = $filename) =~ s/\.maf/_trimmed.tsv/;
+        (my $trim_outfile = $filename) =~ s/\.(.*?)$/_trimmed.tsv/;
         open($trimfh, ">", $trim_outfile);
+        print {$trimfh} join("\t", @trim_fields), "\n";
     };
 
-    # Print headers
-    print {$outfh} shift @$data;
-
-    my @header = split(/\t/, shift @$data);
-    my %header_elems = map{ $_ => $header[$_] } 0..$#header;
-    print {$outfh} join("\t", @header);
-
-    my @trim_indices = qw(0 4 5 6 8 9 10 12 13 15 34 35 37 85 71 72 76 99 123 
-        133 137 139 140);
-
-    # Get header for trim file if we want one.
-    print {$trimfh} join("\t", @header_elems{@trim_indices});
+    # Print headers based on original order.
+    my @header = sort{ 
+        versioncmp($data->[0]{$a}, $data->[0]{$b}) }
+    keys %{$data->[0]};
+    shift @$data;
+    print {$outfh} join("\t", @header), "\n";
 
     for my $var (@$data) {
-        next if $var =~ /\.$/ and $filter;
-        print {$outfh} "$var\n";
-        if ($trim_file) {
-            my @trim_data = (split(/\t/, $var))[@trim_indices];
-            print {$trimfh} join("\t", @trim_data), "\n";
-        }
+        my @variant_data = @$var{@header};
+        next if $variant_data[-1] eq '.' and $filter; 
+        print {$outfh}  join("\t", @variant_data), "\n";
+        print {$trimfh} join("\t", @$var{@trim_fields}), "\n" if ($trim_file);
     }
 }
 
-sub annotate_maf2 {
+sub annotate_maf {
     my ($maf, $hotspots, $tsgs) = @_;
     my @results;
 
     my $csv = Text::CSV->new({ sep_char => "\t" });
 
     open(my $fh, "<", $maf);
-    my $maf_ver = $csv->getline($fh);
+    readline($fh);  # Ditch the MAF version info
     my $header = $csv->getline($fh);
+    my $tot_header_elems = scalar(@$header);
+
+    # Make the first and second  elements of @results the headers (MAF version
+    # and MAF elems) so that we can keep the same output order as the input.
+    push(@results, {map { $header->[$_] => $_ } 0..$#{$header}});
 
     my ($var_count, $filter_count) = (0, 0);
     # TODO: Redo this. Have a set list of categories or something and just have
@@ -293,7 +301,6 @@ sub annotate_maf2 {
 
         # Filter out SNPs, Intronic Variants, etc.
         $filter_count++ and next unless filter_var(\%var_data, 'gnomad');
-        print "Filter count is now: $filter_count\n";
 
         # Try to get a hotspot ID
         my ($hsid, $oncogenicity, $effect); 
@@ -342,7 +349,7 @@ sub annotate_maf2 {
 
         @var_data{qw(MOI_Type Oncogenicity Effect)} = ($moi_type, $oncogenicity,
             $effect);
-        
+
         if (DEBUG) {
             print "MOI category: $moi_type\n";
             dd @var_data{qw(Hugo_Symbol MOI_Type Oncogenicity Effect)};
@@ -352,6 +359,11 @@ sub annotate_maf2 {
         push(@results, {%var_data});
     }
 
+    # Add these new elements to our saved header in @results
+    for my $term (qw(MOI_Type Oncogenicity Effect)) {
+        $results[0]->{$term} = $tot_header_elems++;
+    }
+        
     $logger->info(sprintf("Variant Summary\nTotal variants:\t%3s\nFiltered " .
         "out:\t%3s\nRetained:\t\t%3s", $var_count, $filter_count, 
         $var_count-$filter_count)
@@ -372,7 +384,6 @@ sub filter_var {
 
     # Functional annotation filter. 
     my $var_class = $variant->{'Variant_Classification'};
-    print "$var_class\n";
     if (grep { $var_class =~ /$_/} qw(Intron UTR Silent Flank IGR)) {
         $logger->debug(sprintf("Filtering out variant %s because it's '%s'", 
             __gen_hgvs($variant, 'hgvs_c')->[0], $var_class));
