@@ -60,6 +60,8 @@ USAGE: $scriptname [options] -a <annotation_method> <maf_file(s)>
                        Will only contain some of the most basic output data.
     -o, --outfile      Write output to custom filename rather than default 
                        "annotated.maf" file.
+    -l, --logfile      Write log output to a custom filename rather than a file
+                       called "tso500_moi_annotator_<today>.log".
 
     Other Options
     -v, --version      Version information
@@ -73,6 +75,7 @@ my $annot_method;
 my $mois_only = 0;
 my $trim_file = 1;
 my $verbose;
+my $custom_logfile;
 
 GetOptions( 
     "annot|a=s"     => \$annot_method,
@@ -83,7 +86,8 @@ GetOptions(
     "trim_file|t"   => \$trim_file,
     "outfile|o=s"   => \$outfile,
     "Verbose|V"     => \$verbose,
-    "help|h"        => \$help )
+    "help|h"        => \$help,
+    "logfile|l=s"   => \$custom_logfile)
 or die $usage;
 
 sub help {
@@ -122,7 +126,11 @@ unless ($annot_method) {
 $verbose = 1 if DEBUG;
 
 # Set up a logger.
-my $logfile = 'tso500_moi_annotator_' . now('short') . '.log';
+my $logfile;
+($custom_logfile)
+    ? ($logfile = $custom_logfile)
+    : ($logfile = 'tso500_moi_annotator_' . now('short') . '.log');
+
 my $loggers;
 (DEBUG) ? ($loggers = 'DEBUG, Logfile, Screen') : ($loggers = 'DEBUG, Logfile');
 my $logger_conf = qq(
